@@ -2,12 +2,12 @@ extern crate core;
 
 use std::path::Path;
 use tokio;
-use futures;
 use reqwest::{Client, Url};
 use clap::{ArgGroup, Parser};
 
 mod download_gutenberg;
 mod collect_time_paragraphs;
+mod pipeline;
 
 const MAX_CHILD_TASKS: usize = 8;
 

@@ -1,12 +1,13 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::{fs, thread};
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::mpsc;
-use std::sync::mpsc::{Receiver, Sender, SyncSender};
+use std::sync::mpsc::{Receiver, SyncSender};
 use colored::Colorize;
 use lazy_static::lazy_static;
-use regex::{RegexBuilder, Regex};
+use regex::{Regex};
+use crate::pipeline::{Pipeline, PipelineStageProducer, PipelineStageConsumer, PipelineIntermediateStage, PipelineProducer, PipelineStep, PipelineConsumer};
 
 lazy_static! {
     //static ref PARAGRAPH_PATTERN: Regex = Regex::new(r"(?P<par_text>\w[\w\W]*?)((\r?\n\r?\n)|$)").unwrap();
@@ -38,86 +39,151 @@ impl ParagraphInfo {
 
 
 pub async fn collect(book_path: &Path, time_path: &Path) {
-    thread::scope(|s|{
-        let (paragraph_tx, mut paragraph_rx) = mpsc::sync_channel(64);
-        s.spawn(||{get_paragraphs(book_path, paragraph_tx)});
-        let (filter_paragraph_tx, mut filter_paragraph_rx) = mpsc::sync_channel(32);
-        s.spawn(move ||{paragraph_length_filter(32..512, paragraph_rx, filter_paragraph_tx)});
-        let (time_paragraph_tx, mut time_paragraph_rx) = mpsc::sync_channel(16);
-        s.spawn(move ||{get_time_paragraphs(filter_paragraph_rx, time_paragraph_tx)});
-        s.spawn(move ||{print_time_paragraphs(time_paragraph_rx)});
-    });
+    let mut pipeline: Pipeline<ParagraphInfo> = Pipeline::new();
+    pipeline.set_source(ParagraphProducer::new(book_path));
+    pipeline.push_stage(ParagraphLengthFilter::new(32..512));
+    pipeline.push_stage(ParagraphTimeFilter::new());
+    pipeline.set_sink(ParagraphPrinter::new());
+    pipeline.execute();
 }
+struct ParagraphPrinter {}
 
-fn print_time_paragraphs(parahraphs_in: Receiver<ParagraphInfo>){
-    let mut times = HashMap::new();
-    while let Ok(paragraph) = parahraphs_in.recv() {
-        let (text_start, text_end) = paragraph.section.unwrap();
-        let (hour, minute) = paragraph.time.unwrap();
-        println!("{} {}{}{}",
-                 format!("{} in {} with time {}:{:02}:",
-                         paragraph.author,
-                         paragraph.book,
-                         hour, minute)
-                     .black().on_bright_white(),
-                 &paragraph.text[..text_start], &paragraph.text[text_start..text_end].green(), &paragraph.text[text_end..]);
-        times.insert(hour, times.get(&hour).unwrap_or(&0) + 1);
-    }
-    for i in 0..24 {
-        println!("{}: {}", i, times.get(&i).unwrap_or(&0))
-    }
-}
-
-fn paragraph_length_filter(range: Range<usize>, paragraphs_in: Receiver<ParagraphInfo>, paragraphs_out: SyncSender<ParagraphInfo>){
-    while let Ok(paragraph) = paragraphs_in.recv() {
-        if range.contains(&paragraph.text.len()) {
-            paragraphs_out.send(paragraph);
+impl PipelineStageConsumer<ParagraphInfo> for ParagraphPrinter {
+    fn execute(&self, input_channel: Receiver<ParagraphInfo>) {
+        let mut times = HashMap::new();
+        while let Ok(paragraph) = input_channel.recv() {
+            let (text_start, text_end) = paragraph.section.unwrap();
+            let (hour, minute) = paragraph.time.unwrap();
+            println!("{} {}{}{}",
+                     format!("{} in {} with time {}:{:02}:",
+                             paragraph.author,
+                             paragraph.book,
+                             hour, minute)
+                         .black().on_bright_white(),
+                     &paragraph.text[..text_start], &paragraph.text[text_start..text_end].green(), &paragraph.text[text_end..]);
+            times.insert(hour, times.get(&hour).unwrap_or(&0) + 1);
+        }
+        for i in 0..24 {
+            println!("{}: {}", i, times.get(&i).unwrap_or(&0))
         }
     }
+
+    fn get_input_buffer_size(&self) -> usize {
+        8
+    }
 }
 
-fn get_time_paragraphs(paragraphs_in: Receiver<ParagraphInfo>, time_paragraphs_out: SyncSender<ParagraphInfo>){
-    while let Ok(mut paragraph) = paragraphs_in.recv() {
-        if let Some(x) = TIME_PATTERN.captures(&paragraph.text) {
-            let time_text = x.name("time").unwrap();
-            let mut hour = x.name("hour").unwrap_or_else(||{x.name("hour_g2").expect("Either hour or hour_g2 must be present")}).as_str().parse::<i32>().unwrap();
-            let minute = x.name("minute_g2").map_or(0, |m|m.as_str().parse::<i32>().unwrap());
-            if let Some(ampm) = x.name("ampm_g2") {
-                if ampm.as_str() == "p" {
-                    hour += 12;
+impl ParagraphPrinter {
+    fn new() -> Self {
+        ParagraphPrinter{}
+    }
+}
+impl PipelineConsumer<ParagraphInfo> for ParagraphPrinter {}
+
+struct ParagraphTimeFilter {}
+
+impl PipelineIntermediateStage<ParagraphInfo> for ParagraphTimeFilter {
+    fn execute(&self, input_channel: Receiver<ParagraphInfo>, output_channel: SyncSender<ParagraphInfo>) {
+        while let Ok(mut paragraph) = input_channel.recv() {
+            if let Some(x) = TIME_PATTERN.captures(&paragraph.text) {
+                let time_text = x.name("time").unwrap();
+                let mut hour = x.name("hour").unwrap_or_else(||{x.name("hour_g2").expect("Either hour or hour_g2 must be present")}).as_str().parse::<i32>().unwrap();
+                let minute = x.name("minute_g2").map_or(0, |m|m.as_str().parse::<i32>().unwrap());
+                if let Some(ampm) = x.name("ampm_g2") {
+                    if ampm.as_str() == "p" {
+                        hour += 12;
+                    }
                 }
+                paragraph.section = Some((time_text.start(), time_text.end()));
+                paragraph.time = Some((hour, minute));
+                output_channel.send(paragraph);
             }
-            paragraph.section = Some((time_text.start(), time_text.end()));
-            paragraph.time = Some((hour, minute));
-            time_paragraphs_out.send(paragraph);
+        }
+    }
+
+    fn get_input_buffer_size(&self) -> usize {
+        32
+    }
+}
+
+impl ParagraphTimeFilter{
+    fn new() -> Self {
+        ParagraphTimeFilter{}
+    }
+}
+
+impl PipelineStep<ParagraphInfo> for ParagraphTimeFilter{}
+
+struct ParagraphLengthFilter {
+    length_range: Range<usize>
+}
+
+impl PipelineIntermediateStage<ParagraphInfo> for ParagraphLengthFilter {
+    fn execute(&self, input_channel: Receiver<ParagraphInfo>, output_channel: SyncSender<ParagraphInfo>) {
+        while let Ok(paragraph) = input_channel.recv() {
+            if self.length_range.contains(&paragraph.text.len()) {
+                output_channel.send(paragraph);
+            }
+        }
+    }
+
+    fn get_input_buffer_size(&self) -> usize {
+        64
+    }
+}
+
+impl ParagraphLengthFilter {
+    fn new(range: Range<usize>) -> Self {
+        ParagraphLengthFilter{
+            length_range: range
         }
     }
 }
 
-fn get_paragraphs(book_path: &Path, paragraphs_out: SyncSender<ParagraphInfo>) {
-    let mut to_read = Vec::new();
-    to_read.push(String::from(book_path.to_str().unwrap()));
+impl PipelineStep<ParagraphInfo> for ParagraphLengthFilter {}
 
-    while let Some(path) = to_read.pop() {
-        let children = fs::read_dir(&path).unwrap();
-        for child in children {
-            let combined_dir = child.unwrap().path();
-            if combined_dir.is_file() {
-                let contents = fs::read_to_string(&combined_dir).unwrap().replace('\r', "");
-                let title = TITLE_PATTERN.captures(&contents).map_or(combined_dir.file_name().unwrap().to_str().unwrap(), |c|c.name("title").unwrap().as_str());
-                let author = AUTHOR_PATTERN.captures(&contents).map_or("Unknown", |c|c.name("author").unwrap().as_str());
-                for paragraph in PARAGRAPH_PATTERN.split(&contents) {
-                    paragraphs_out.send(
-                        ParagraphInfo::new(
-                            paragraph,
-                            title,
+struct ParagraphProducer {
+    // reads paragraphs from a file
+    book_path: PathBuf
+}
+
+impl PipelineStageProducer<ParagraphInfo> for ParagraphProducer {
+    fn execute(&self, output_channel: SyncSender<ParagraphInfo>) {
+        let mut to_read = Vec::new();
+        to_read.push(String::from(self.book_path.to_str().unwrap()));
+
+        while let Some(path) = to_read.pop() {
+            let children = fs::read_dir(&path).unwrap();
+            for child in children {
+                let combined_dir = child.unwrap().path();
+                if combined_dir.is_file() {
+                    let contents = fs::read_to_string(&combined_dir).unwrap().replace('\r', "");
+                    let title = TITLE_PATTERN.captures(&contents).map_or(combined_dir.file_name().unwrap().to_str().unwrap(), |c|c.name("title").unwrap().as_str());
+                    let author = AUTHOR_PATTERN.captures(&contents).map_or("Unknown", |c|c.name("author").unwrap().as_str());
+                    for paragraph in PARAGRAPH_PATTERN.split(&contents) {
+                        output_channel.send(
+                            ParagraphInfo::new(
+                                paragraph,
+                                title,
                                 author
-                        )
-                    ).unwrap_or(());
+                            )
+                        ).unwrap_or(());
+                    }
+                } else if combined_dir.is_dir() {
+                    to_read.push(combined_dir.to_str().unwrap().to_string());
                 }
-            } else if combined_dir.is_dir() {
-                to_read.push(combined_dir.to_str().unwrap().to_string());
             }
+        }
+    }
+}
+
+impl PipelineProducer<ParagraphInfo> for ParagraphProducer {
+
+}
+impl ParagraphProducer {
+    fn new(book_path: &Path) -> Self{
+        ParagraphProducer{
+            book_path: book_path.to_path_buf()
         }
     }
 }
