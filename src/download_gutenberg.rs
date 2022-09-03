@@ -12,6 +12,7 @@ use lazy_static::lazy_static;
 
 lazy_static! {
     static ref FOLLOW_PATTERN: Regex = Regex::new(r#"\d+/"#).unwrap();
+    static ref FILE_PATTERN: Regex = Regex::new(r"^\d+.txt$").unwrap();
 }
 
 async fn make_request(url: String, client: Client) -> (Url, String) {
@@ -23,7 +24,7 @@ pub async fn download_url(url: &str, book_directory: &Path, client: Client) {
     let mut child_tasks = JoinSet::new();
     let mut queue = Vec::new();
     child_tasks.spawn( make_request(url.to_string(), client.clone()));
-    fs::create_dir(book_directory).unwrap_or(());
+    fs::create_dir_all(book_directory).unwrap_or(());
     while !child_tasks.is_empty() {
         for result in child_tasks.join_next().await {
             let (base_url, response_body) = result.as_ref().unwrap();
@@ -45,7 +46,7 @@ pub async fn download_url(url: &str, book_directory: &Path, client: Client) {
                                     queue.push(combined_path.to_string());
                                 }
                             }
-                        } else if dir.ends_with(".txt") {
+                        } else if FILE_PATTERN.is_match(dir) {
                             println!("file {}", dir);
                             let filepath = book_directory.join(dir);
                             if !filepath.exists() {
@@ -53,7 +54,7 @@ pub async fn download_url(url: &str, book_directory: &Path, client: Client) {
                                 match &mut file {
                                     Ok(f) => {
                                         let file_contents = client.get(combined_path).send().await.unwrap();
-                                        f.write_all(file_contents.text().await.unwrap().as_bytes());
+                                        f.write_all(file_contents.text().await.unwrap().as_bytes()).unwrap_or(());
                                         println!("{}", "Downloaded".white().on_green())
                                     }
                                     Err(e) => {
