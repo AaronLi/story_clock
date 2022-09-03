@@ -44,10 +44,6 @@ impl <T: Send>Pipeline<T> {
         self.sink = Some(Box::new(sink));
     }
 
-    pub fn set_stage(&mut self, index: usize, stage: impl PipelineStep<T> + 'static){
-        self.stages.insert(index, Box::new(stage));
-    }
-
     pub fn push_stage(&mut self, stage: impl PipelineStep<T> + 'static){
         self.stages.push(Box::new(stage));
     }

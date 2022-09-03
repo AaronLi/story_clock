@@ -24,8 +24,6 @@ fn display_time(time_path: &Path, hour: u32, minute: u32) {
     let file_contents = fs::read_to_string(&paragraph_file.path()).unwrap();
     let paragraph = serde_yaml::from_str::<ParagraphInfo>(&file_contents).unwrap();
     let (start, end) = paragraph.section.unwrap();
-    println!("{}\n\t\t\t\t{}",
-             format!("{}{}{}", &paragraph.text[..start], &paragraph.text[start..end].green(), &paragraph.text[end..]),
-             format!("{} in {}", paragraph.author, paragraph.book).black().on_bright_white()
-    );
+    println!("{}{}{}", &paragraph.text[..start], &paragraph.text[start..end].green(), &paragraph.text[end..]);
+    println!("\t\t\t\t{}", format!("{} in {}", paragraph.author, paragraph.book).black().on_bright_white());
 }

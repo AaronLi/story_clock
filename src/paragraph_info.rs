@@ -11,7 +11,7 @@ pub struct ParagraphInfo {
 
 impl ParagraphInfo {
     pub fn new(text: &str, book: &str, author: &str) -> Self {
-        return ParagraphInfo{
+        ParagraphInfo{
             text: text.to_string(),
             book: book.to_string(),
             author: author.to_string(),

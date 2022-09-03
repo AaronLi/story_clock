@@ -137,7 +137,7 @@ impl PipelineIntermediateStage<ParagraphInfo> for ParagraphTimeFilter {
             for x in TIME_PATTERN.captures_iter(&paragraph.text) {
                 let time_text = x.name("time").unwrap();
                 let hour_str = x.name("hour_oclock").unwrap_or_else(||{x.name("hour_ampm").expect("Either hour or hour_g2 must be present")}).as_str();
-                let mut hour = hour_str.parse::<i32>().expect(&format!("failed to parse \"{}\"", hour_str));
+                let mut hour = hour_str.parse::<i32>().unwrap_or_else(|_| panic!("failed to parse \"{}\"", hour_str));
                 let minute = x.name("minute_ampm").map_or(0, |m|m.as_str().parse::<i32>().unwrap());
                 if !(0..=24).contains(&hour) || !(0..60).contains(&minute) {
                     continue

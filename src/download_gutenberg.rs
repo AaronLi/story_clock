@@ -26,9 +26,9 @@ pub async fn download_url(url: &str, book_directory: &Path, client: Client) {
     child_tasks.spawn( make_request(url.to_string(), client.clone()));
     fs::create_dir_all(book_directory).unwrap_or(());
     while !child_tasks.is_empty() {
-        for result in child_tasks.join_next().await {
+        if let Some(result) = child_tasks.join_next().await {
             let (base_url, response_body) = result.as_ref().unwrap();
-            let document = Html::parse_document(&response_body);
+            let document = Html::parse_document(response_body);
             let selector = Selector::parse("a").unwrap();
             for link in document.select(&selector) {
                 let destination = link.value().attr("href");

@@ -1,7 +1,6 @@
 extern crate core;
 
 use std::path::Path;
-use tokio;
 use reqwest::{Client, Url};
 use clap::{ArgGroup, Parser};
 use crate::paragraph_info::ParagraphInfo;
